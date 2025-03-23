@@ -1,0 +1,187 @@
+Complete set of code for VM Auto Scaling
+1. VM Setup in VirtualBox
+Enable SSH
+# Install OpenSSH
+sudo apt update
+sudo apt install openssh-server
+
+# Enable and start SSH service
+sudo systemctl enable ssh
+sudo systemctl start ssh
+
+# Allow SSH through firewall
+sudo ufw allow ssh
+________________________________________
+2. Installing Required Tools
+Install Docker & Docker Compose
+# Install Docker
+sudo apt update
+sudo apt install -y docker.io
+
+# Enable and start Docker
+sudo systemctl enable docker
+sudo systemctl start docker
+Install Python & Flask
+# Install Python and Flask
+sudo apt install -y python3 python3-pip
+pip3 install flask gunicorn
+________________________________________
+3. Corrected Prometheus Installation
+Download and Install Prometheus
+# Get the latest version dynamically
+VERSION=$(curl -s https://api.github.com/repos/prometheus/prometheus/releases/latest | grep tag_name | cut -d '"' -f 4)
+
+# Download latest Prometheus release
+wget https://github.com/prometheus/prometheus/releases/download/v2.46.0/prometheus-2.46.0.linux-amd64.tar.gz
+
+# Extract and move binaries
+tar xvfz prometheus-2.46.0.linux-amd64.tar.gz
+sudo mv prometheus-2.46.0.linux-amd64/prometheus /usr/local/bin/
+sudo mv prometheus-$2.46.0.linux-amd64/promtool /usr/local/bin/
+Configure Prometheus
+# Create configuration directory
+sudo mkdir /etc/prometheus
+sudo mkdir /var/lib/prometheus
+
+# Move config files
+sudo mv prometheus-2.46.0.linux-amd64/prometheus.yml /etc/prometheus/
+
+# Set ownership
+sudo useradd --no-create-home --shell /bin/false prometheus
+sudo chown -R prometheus:prometheus /etc/prometheus /var/lib/prometheus
+Create Prometheus Systemd Service
+# Create systemd service file
+sudo tee /etc/systemd/system/prometheus.service <<EOF
+[Unit]
+Description=Prometheus Monitoring
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/local/bin/prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path=/var/lib/prometheus/ \
+  --web.console.templates=/usr/local/bin/consoles \
+  --web.console.libraries=/usr/local/bin/console_libraries
+
+[Install]
+WantedBy=multi-user.target
+EOF
+Start Prometheus
+# Reload systemd and start Prometheus
+sudo systemctl daemon-reload
+sudo systemctl enable prometheus
+sudo systemctl start prometheus
+________________________________________
+4. Configuring Auto-Scaling to GCP
+Install Google Cloud SDK
+# Install Google Cloud SDK
+curl https://sdk.cloud.google.com | bash
+exec -l $SHELL
+
+# Initialize gcloud
+gcloud init
+Enable Kubernetes API
+gcloud services enable container.googleapis.com
+Create GKE Cluster with Auto-Scaling
+gcloud container clusters create auto-cluster \
+  --num-nodes=1 \
+  --enable-autoscaling \
+  --min-nodes=1 \
+  --max-nodes=5 \
+  --machine-type=e2-standard-2 \
+  --region=us-central1
+Install kubectl
+gcloud components install kubectl
+________________________________________
+5. Flask Application Code
+Create app.py
+# Simple Flask App
+from flask import Flask
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Hello, Auto-Scaling World!"
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+Create Dockerfile
+# Dockerfile for Flask App
+FROM python:3.9
+WORKDIR /app
+COPY app.py /app
+RUN pip install flask gunicorn
+CMD ["gunicorn", "-b", "0.0.0.0:5000", "app:app"]
+Build and Push Docker Image
+# Authenticate with GCP
+gcloud auth configure-docker
+
+# Build Docker image
+docker build -t gcr.io/[YOUR_PROJECT_ID]/flask-app:latest .
+
+# Push image to GCR
+docker push gcr.io/[YOUR_PROJECT_ID]/flask-app:latest
+________________________________________
+6. Kubernetes Deployment & Auto-Scaling
+Create deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flask-app
+  template:
+    metadata:
+      labels:
+        app: flask-app
+    spec:
+      containers:
+      - name: flask-app
+        image: gcr.io/YOUR_PROJECT_ID/flask-app:latest
+        ports:
+        - containerPort: 5000
+Create service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: flask-app-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: flask-app
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 5000
+Apply Kubernetes Configurations
+# Apply deployment and service
+kubectl apply -f deployment.yaml
+kubectl apply -f service.yaml
+Enable Horizontal Pod Auto-Scaling
+# Enable HPA
+targetCPU=75
+kubectl autoscale deployment flask-app --cpu-percent=$targetCPU --min=1 --max=5
+
+# Verify HPA
+kubectl get hpa
+________________________________________
+7. Simulating High CPU Load
+Install hey to Simulate Load
+sudo apt-get install hey
+Run Load Test
+# Get External IP of the Flask Application
+kubectl get svc flask-app-service
+
+# Simulate high load
+hey -n 10000 -c 100 http://[EXTERNAL-IP]/
+
+# Monitor pods
+kubectl get pods
+
